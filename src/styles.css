@@ -175,6 +175,7 @@ kbd {
   .touch-ui .stick-area {
     /* Keep room for the hold buttons on narrow phones. */
     left: min(50%, calc(100% - var(--portrait-edge) - var(--portrait-action-width) - 8px - var(--stick-size) / 2));
+    bottom: calc(var(--control-bottom) - 25px);
   }
   .touch-ui .stick-knob { width: 96px; height: 96px; }
   .touch-ui .touch-actions { left: auto; right: var(--portrait-edge); }
