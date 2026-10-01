@@ -3,6 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { Trail } from '@react-three/drei'
 import * as THREE from 'three'
 import { game, keys, respawn } from './game.js'
+import { touchInput } from './input.js'
 import { groundAt, landmarkAt } from './world/terrain.js'
 
 const X = new THREE.Vector3(1, 0, 0)
@@ -102,14 +103,15 @@ export default function Plane() {
 
     // ---- input -----------------------------------------------------------
     let pitchIn = (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0) - (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0)
+    pitchIn = THREE.MathUtils.clamp(pitchIn + touchInput.pitch, -1, 1)
     if (g.invert) pitchIn = -pitchIn
-    const rollIn = (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0) - (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0)
+    const rollIn = THREE.MathUtils.clamp((k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0) - (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) + touchInput.roll, -1, 1)
     const yawIn = (k.has('KeyQ') ? 1 : 0) - (k.has('KeyE') ? 1 : 0)
     input.pitch = approach(input.pitch, pitchIn, 7, dt)
     input.roll = approach(input.roll, rollIn, 7, dt)
     input.yaw = approach(input.yaw, yawIn, 5, dt)
-    g.boosting = (k.has('Space') || k.has('ShiftLeft') || k.has('ShiftRight')) && g.boost > 0.02
-    g.braking = k.has('KeyC') || k.has('KeyX')
+    g.boosting = (touchInput.boost || k.has('Space') || k.has('ShiftLeft') || k.has('ShiftRight')) && g.boost > 0.02
+    g.braking = touchInput.brake || k.has('KeyC') || k.has('KeyX')
 
     // ---- flight model (arcade) --------------------------------------------
     const q = g.quat

@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { heightAt } from './world/terrain.js'
+import { resetTouchInput } from './input.js'
 
 // Ring course: a tour of the South Zone. off = metres above ground (or absolute y if abs).
 const COURSE_DEF = [
@@ -80,6 +81,7 @@ export function placeAt(from, target) {
 }
 
 export function startGame(mode) {
+  resetTouchInput()
   game.mode = mode
   game.ringIndex = 0
   game.time = 0
@@ -120,7 +122,11 @@ if (typeof window !== 'undefined') {
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault()
   })
   window.addEventListener('keyup', (e) => keys.delete(e.code))
-  window.addEventListener('blur', () => keys.clear())
+  const releaseInput = () => { keys.clear(); resetTouchInput() }
+  window.addEventListener('blur', releaseInput)
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) releaseInput()
+  })
 }
 
 if (typeof window !== 'undefined') window.__game = game // handy for debugging in the console

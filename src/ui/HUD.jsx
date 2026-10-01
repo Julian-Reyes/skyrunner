@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { game, startGame, keys } from '../game.js'
 import { heightAt, favelaAt } from '../world/terrain.js'
 import { initAudio } from '../audio.js'
+import TouchControls from './TouchControls.jsx'
+import { resetTouchInput } from '../input.js'
 
 const fmt = (t) => {
   if (t == null) return '--:--.-'
@@ -103,6 +105,13 @@ export default function HUD() {
   const flashRef = useRef()
   const lastLandmark = useRef('')
   const [landmark, setLandmark] = useState({ name: '', key: 0 })
+  const [touch, setTouch] = useState(() => window.matchMedia('(any-pointer: coarse)').matches || navigator.maxTouchPoints > 0)
+
+  useEffect(() => {
+    const detect = (e) => { if (e.pointerType === 'touch') setTouch(true) }
+    window.addEventListener('pointerdown', detect)
+    return () => window.removeEventListener('pointerdown', detect)
+  }, [])
 
   useEffect(() => {
     let raf
@@ -142,7 +151,7 @@ export default function HUD() {
         game.messageT = 1.5
       }
       if (e.code === 'KeyR' && game.phase !== 'title') startGame(game.mode)
-      if (e.code === 'Escape') game.phase = 'title'
+      if (e.code === 'Escape') { game.phase = 'title'; resetTouchInput(); keys.clear() }
       if (game.phase === 'title' && e.code === 'Enter') begin('tour')
     }
     window.addEventListener('keydown', onKey)
@@ -160,7 +169,7 @@ export default function HUD() {
   const total = g.course.length
 
   return (
-    <div className="hud">
+    <div className={`hud${touch ? ' touch-ui' : ''}`}>
       <div ref={flashRef} className="flash" />
 
       {g.phase === 'title' && (
@@ -178,14 +187,17 @@ export default function HUD() {
               </button>
             </div>
             {g.best != null && <div className="best">Best tour time: {fmt(g.best)}</div>}
-            <div className="controls">
+            {touch ? <div className="controls touch-instructions">
+              <div>Drag the bottom stick down to climb, up to dive, sideways to bank.</div>
+              <div>Hold Boost or Brake with your other thumb while steering.</div>
+              <div className="touchnote">Turn your phone sideways for a wider view.</div>
+            </div> : <div className="controls">
               <div><kbd>W</kbd><kbd>S</kbd> pitch (S pulls up)</div>
               <div><kbd>A</kbd><kbd>D</kbd> roll / bank to turn</div>
               <div><kbd>Q</kbd><kbd>E</kbd> rudder</div>
               <div><kbd>Space</kbd> boost · <kbd>C</kbd> air brake</div>
               <div><kbd>I</kbd> invert pitch · <kbd>M</kbd> mute · <kbd>R</kbd> restart</div>
-            </div>
-            <div className="touchnote">This build needs a keyboard. Open it on a laptop or desktop to fly.</div>
+            </div>}
           </div>
         </div>
       )}
@@ -203,10 +215,19 @@ export default function HUD() {
                 {g.ringIndex < total && <div className="next">Next: {g.course[g.ringIndex].name}</div>}
               </>
             ) : (
-              <div className="small">Free flight · Esc for menu</div>
+              <div className="small">Free flight{!touch && ' · Esc for menu'}</div>
             )}
           </div>
           <Minimap />
+          {touch && <>
+            <div className="flight-toolbar">
+              <button onClick={() => { resetTouchInput(); keys.clear(); g.phase = 'title' }}>Menu</button>
+              <button onClick={() => begin(g.mode)}>Restart</button>
+              <button aria-label={g.muted ? 'Unmute sound' : 'Mute sound'} aria-pressed={g.muted}
+                onClick={() => { initAudio(); g.muted = !g.muted }}>{g.muted ? 'Unmute' : 'Mute'}</button>
+            </div>
+            <TouchControls key={g.phase === 'crashed' ? 'crashed' : 'flight'} />
+          </>}
           <div key={landmark.key} className="landmark">{landmark.name}</div>
           {g.messageT > 0 && <div className="message">{g.message}</div>}
           <div className="gauges">
@@ -227,7 +248,7 @@ export default function HUD() {
             <div className="kicker">Chegada · São Conrado</div>
             <h2>{fmt(g.lastTime)}</h2>
             {g.newBest ? <p className="nb">New best time!</p> : g.best != null && <p>Best: {fmt(g.best)}</p>}
-            <p className="hint">Keep flying freely, press <kbd>R</kbd> to race again, or <kbd>Esc</kbd> for the menu.</p>
+            <p className="hint">{touch ? 'Keep flying freely, or tap Restart to race again.' : <>Keep flying freely, press <kbd>R</kbd> to race again, or <kbd>Esc</kbd> for the menu.</>}</p>
           </div>
         </div>
       )}
