@@ -34,36 +34,7 @@ function makeInstanced(geometry, material, items, { cast = true, receive = true 
 const boxGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0)
 const flatMat = () => new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.9 })
 
-// Tower facades: windows, ground-floor band, base shading and roof tone are all
-// drawn in the fragment shader from the wall position, so the towers stay plain
-// instanced boxes. Windows fade to their average tone with distance (no moire),
-// and some upper windows on sun-facing walls catch the sunset and bloom.
-function towerMat() {
-  const mat = flatMat()
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uSunDir = { value: SUN_DIR }
-    shader.uniforms.uSunColor = { value: SUN_COLOR }
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', /* glsl */ `#include <common>
-        varying vec3 vBoxPos;
-        varying vec3 vBoxSize;
-        varying vec3 vBoxNormal;
-        varying float vSeed;`)
-      .replace('#include <begin_vertex>', /* glsl */ `#include <begin_vertex>
-        vBoxSize = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
-        vBoxPos = position * vBoxSize;
-        vBoxNormal = normal;
-        vSeed = fract(sin(dot(instanceMatrix[3].xz, vec2(12.9898, 78.233))) * 43758.5453);`)
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', /* glsl */ `#include <common>
-        uniform vec3 uSunDir;
-        uniform vec3 uSunColor;
-        varying vec3 vBoxPos;
-        varying vec3 vBoxSize;
-        varying vec3 vBoxNormal;
-        varying float vSeed;
-        float towerHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }`)
-      .replace('#include <color_fragment>', /* glsl */ `#include <color_fragment>
+const TOWER_FACADE = /* glsl */ `
         float winMask = 0.0;
         float winGlint = 0.0;
         if (abs(vBoxNormal.y) > 0.5) {
@@ -107,13 +78,113 @@ function towerMat() {
           float high = smoothstep(0.35, 0.95, h / vBoxSize.y);
           float chance = 0.16 * high;
           winGlint = winMask * facing * mix(step(1.0 - chance, towerHash(id.yx + vSeed * 37.0)), chance, distFade);
-        }`)
+        }`
+
+// Favela houses: stacked storeys in paint, bare brick or render, slab edges,
+// small windows with the odd light on, and concrete or corrugated roofs.
+const FAVELA_FACADE = /* glsl */ `
+        float winMask = 0.0;
+        float winGlint = 0.0;
+        float h = vBoxPos.y - 2.5; // houses are sunk 2.5 m into the slope
+        float floorH = 3.0;
+        if (abs(vBoxNormal.y) > 0.5) {
+          // roof: mostly bare concrete slabs with a low wall-coloured rim,
+          // the rest corrugated sheet in grey-blue or rust
+          vec2 edge = 0.5 * vBoxSize.xz - abs(vBoxPos.xz);
+          float rim = 1.0 - smoothstep(0.3, 0.45, min(edge.x, edge.y));
+          float kind = fract(vSeed * 5.0);
+          vec3 slab = vec3(0.60, 0.58, 0.55) * (0.88 + 0.24 * fract(vSeed * 17.0));
+          float ridge = vBoxPos.x * 2.2;
+          float ridges = mix(0.9 + 0.1 * step(0.5, fract(ridge)), 0.95, smoothstep(0.3, 0.8, fwidth(ridge)));
+          vec3 sheet = mix(vec3(0.52, 0.56, 0.60), vec3(0.50, 0.33, 0.24), step(0.5, fract(vSeed * 29.0))) * ridges;
+          diffuseColor.rgb = kind < 0.62 ? mix(slab, diffuseColor.rgb * 0.9, rim) : sheet;
+        } else {
+          bool xFace = abs(vBoxNormal.x) > 0.5;
+          float along = xFace ? vBoxPos.z : vBoxPos.x;
+          float wallW = xFace ? vBoxSize.z : vBoxSize.x;
+          float storey = floor(max(h, 0.0) / floorH);
+          float floors = floor((vBoxSize.y - 2.5) / floorH + 0.01);
+
+          // every storey was built at a different time: upper ones are often
+          // still bare brick or grey render instead of the ground floor's paint
+          float fr = towerHash(vec2(storey, vSeed * 53.0));
+          vec3 wall = diffuseColor.rgb;
+          if (storey > 0.5) {
+            vec3 brick = vec3(0.62, 0.34, 0.22) * (0.85 + 0.3 * fract(fr * 7.0));
+            wall = fr < 0.4 ? brick : (fr < 0.55 ? vec3(0.60, 0.58, 0.54) : wall);
+          }
+          // concrete slab edge between storeys
+          float fy = h / floorH;
+          float fwy = fwidth(fy);
+          float slabEdge = (1.0 - smoothstep(0.08, 0.08 + fwy, fy - storey)) * step(0.5, storey) * (1.0 - smoothstep(0.25, 0.6, fwy));
+          wall = mix(wall, vec3(0.66, 0.64, 0.60), slabEdge * 0.8);
+          // exposed foundation on the downhill side
+          if (h < 0.0) wall = vec3(0.42, 0.36, 0.32);
+          wall *= mix(0.72, 1.0, smoothstep(0.0, 3.0, h));
+
+          // small windows, not in every bay
+          float bays = max(1.0, floor(wallW / 2.6));
+          vec2 cell = vec2((along / wallW + 0.5) * bays, fy);
+          vec2 id = floor(cell);
+          vec2 f = cell - id;
+          vec2 fw = fwidth(cell);
+          float has = step(towerHash(id + vSeed * 71.0 + (xFace ? 3.0 : 0.0)), 0.72) * step(0.0, h) * step(id.y, floors - 1.0);
+          float wx = smoothstep(0.28 - fw.x, 0.28 + fw.x, f.x) * (1.0 - smoothstep(0.72 - fw.x, 0.72 + fw.x, f.x));
+          float wy = smoothstep(0.38 - fw.y, 0.38 + fw.y, f.y) * (1.0 - smoothstep(0.78 - fw.y, 0.78 + fw.y, f.y));
+          float distFade = smoothstep(0.3, 0.8, max(fw.x, fw.y));
+          winMask = has * mix(wx * wy, 0.18, distFade);
+          diffuseColor.rgb = mix(wall, vec3(0.07, 0.08, 0.11), winMask);
+
+          // a few lights already on at dusk
+          winGlint = winMask * mix(step(0.92, towerHash(id.yx + vSeed * 19.0)), 0.08, distFade) * 0.6;
+        }
+`
+
+// Tower facades: windows, ground-floor band, base shading and roof tone are all
+// drawn in the fragment shader from the wall position, so the towers stay plain
+// instanced boxes. Windows fade to their average tone with distance (no moire),
+// and some upper windows on sun-facing walls catch the sunset and bloom.
+function towerMat() {
+  return facadeMat('tower-facade', TOWER_FACADE)
+}
+
+// Shared plumbing for box facades drawn in the fragment shader. `facade` is
+// GLSL that runs after the instance colour is read; it edits diffuseColor and
+// sets winMask (glass, 0-1) and winGlint (glowing glass, 0-1). It can use
+// vBoxPos (metres from the box's base centre), vBoxSize, vBoxNormal (object
+// space) and vSeed (0-1, one value per building).
+function facadeMat(key, facade) {
+  const mat = flatMat()
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uSunDir = { value: SUN_DIR }
+    shader.uniforms.uSunColor = { value: SUN_COLOR }
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', /* glsl */ `#include <common>
+        varying vec3 vBoxPos;
+        varying vec3 vBoxSize;
+        varying vec3 vBoxNormal;
+        varying float vSeed;`)
+      .replace('#include <begin_vertex>', /* glsl */ `#include <begin_vertex>
+        vBoxSize = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+        vBoxPos = position * vBoxSize;
+        vBoxNormal = normal;
+        vSeed = fract(sin(dot(instanceMatrix[3].xz, vec2(12.9898, 78.233))) * 43758.5453);`)
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', /* glsl */ `#include <common>
+        uniform vec3 uSunDir;
+        uniform vec3 uSunColor;
+        varying vec3 vBoxPos;
+        varying vec3 vBoxSize;
+        varying vec3 vBoxNormal;
+        varying float vSeed;
+        float towerHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }`)
+      .replace('#include <color_fragment>', '#include <color_fragment>\n' + facade)
       .replace('#include <roughnessmap_fragment>', /* glsl */ `#include <roughnessmap_fragment>
         roughnessFactor = mix(roughnessFactor, 0.5, winMask);`)
       .replace('#include <emissivemap_fragment>', /* glsl */ `#include <emissivemap_fragment>
         totalEmissiveRadiance += uSunColor * winGlint * 1.8;`)
   }
-  mat.customProgramCacheKey = () => 'tower-facade'
+  mat.customProgramCacheKey = () => key
   return mat
 }
 
@@ -147,6 +218,7 @@ function buildCity() {
 }
 
 function buildFavelas() {
+  const extraRand = mulberry32(23) // separate stream so house positions don't move
   const houses = []
   const tanks = []
   for (const f of FAVELAS) {
@@ -164,13 +236,27 @@ function buildFavelas() {
       const floors = 1 + Math.floor(rand() * rand() * 4)
       const height = floors * 3 + 0.6
       const ry = Math.round(rand() * 4) * (Math.PI / 2) + (rand() - 0.5) * 0.3
-      houses.push({ x, y: h - 2.5, z, ry, sx: w, sy: height + 2.5, sz: w * (0.7 + rand() * 0.5), c: pick(FAVELA_COLORS) })
-      if (rand() < 0.35) tanks.push({ x: x + (rand() - 0.5) * 2, y: h + height, z: z + (rand() - 0.5) * 2, sx: 1.1, sy: 1.3, sz: 1.1, c: '#2f6fd0' })
+      const d = w * (0.7 + rand() * 0.5)
+      houses.push({ x, y: h - 2.5, z, ry, sx: w, sy: height + 2.5, sz: d, c: pick(FAVELA_COLORS) })
+      // "puxadinho": a smaller room added on the roof later, in its own colour.
+      // Like the houses it is sunk 2.5 m (into the house below) so the shader's
+      // storey maths is the same for both.
+      let tx = x, tz = z, ty = h + height
+      if (extraRand() < 0.4) {
+        const aw = w * (0.5 + extraRand() * 0.3), ad = d * (0.5 + extraRand() * 0.3)
+        const ox = (extraRand() - 0.5) * (w - aw), oz = (extraRand() - 0.5) * (d - ad)
+        tx = x + Math.cos(ry) * ox + Math.sin(ry) * oz
+        tz = z - Math.sin(ry) * ox + Math.cos(ry) * oz
+        houses.push({ x: tx, y: ty - 2.5, z: tz, ry, sx: aw, sy: 3.6 + 2.5, sz: ad, c: FAVELA_COLORS[Math.floor(extraRand() * FAVELA_COLORS.length)] })
+        ty += 3.6
+      }
+      const jitter = tx === x ? 2 : 1 // keep the tank on the smaller roof
+      if (rand() < 0.35) tanks.push({ x: tx + (rand() - 0.5) * jitter, y: ty, z: tz + (rand() - 0.5) * jitter, sx: 1.1, sy: 1.3, sz: 1.1, c: '#2f6fd0' })
       placed++
     }
   }
   const tankGeo = new THREE.CylinderGeometry(1, 1, 1, 6).translate(0, 0.5, 0)
-  return [makeInstanced(boxGeo, flatMat(), houses), makeInstanced(tankGeo, flatMat(), tanks, { cast: false })]
+  return [makeInstanced(boxGeo, facadeMat('favela-facade', FAVELA_FACADE), houses), makeInstanced(tankGeo, flatMat(), tanks, { cast: false })]
 }
 
 // Palm trunk: a thin tapered cylinder of unit height that curves toward +x.
