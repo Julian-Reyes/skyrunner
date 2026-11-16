@@ -173,8 +173,51 @@ function buildFavelas() {
   return [makeInstanced(boxGeo, flatMat(), houses), makeInstanced(tankGeo, flatMat(), tanks, { cast: false })]
 }
 
+// Palm trunk: a thin tapered cylinder of unit height that curves toward +x.
+// Instances scale x for how far it leans and y for height.
+const PALM_BEND = 0.18
+function palmTrunkGeo() {
+  const g = new THREE.CylinderGeometry(0.022, 0.036, 1, 5, 5).translate(0, 0.5, 0)
+  const p = g.attributes.position
+  for (let i = 0; i < p.count; i++) p.setX(i, p.getX(i) + PALM_BEND * p.getY(i) ** 2)
+  g.computeVertexNormals()
+  return g
+}
+
+// Palm crown: arching fronds of unit length, each folded along its midrib so
+// the two halves catch the light differently. About 130 triangles per palm.
+function palmCrownGeo() {
+  const jitter = mulberry32(11)
+  const pos = []
+  const frond = (angle, len, rise, droop, width) => {
+    const ca = Math.cos(angle), sa = Math.sin(angle)
+    // midrib as [distance out, height], arching up then hanging down at the tip
+    const rib = [[0, 0], [0.35 * len, rise], [0.72 * len, rise * 0.9 - droop * 0.35], [len, rise * 0.3 - droop]]
+    const half = [width * 0.6, width, width * 0.75, 0]
+    const P = (i, side) => {
+      const [d, h] = rib[i]
+      const o = half[i] * side
+      return [ca * d - sa * o, h - Math.abs(o) * 0.45, sa * d + ca * o]
+    }
+    for (let i = 0; i < 3; i++) {
+      for (const side of [-1, 1]) {
+        if (half[i + 1] > 0) pos.push(...P(i, 0), ...P(i + 1, 0), ...P(i + 1, side))
+        pos.push(...P(i, 0), ...P(i + 1, side), ...P(i, side))
+      }
+    }
+  }
+  const OUTER = 9, INNER = 5
+  for (let k = 0; k < OUTER; k++) frond((k + jitter() * 0.6) * ((Math.PI * 2) / OUTER), 0.85 + jitter() * 0.15, 0.2, 0.45 + jitter() * 0.2, 0.2)
+  for (let k = 0; k < INNER; k++) frond((k + jitter() * 0.6) * ((Math.PI * 2) / INNER) + 0.3, 0.55 + jitter() * 0.1, 0.42, 0.05, 0.15)
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  g.computeVertexNormals()
+  return g
+}
+
 function buildBeach() {
   const trunks = [], crowns = [], poles = [], umbrellas = []
+  const palmRand = mulberry32(7) // separate stream so the rest of the city keeps its layout
   // palms on the promenade from Leblon to Leme
   for (let x = -1700; x < 1450; x += 26) {
     if (Math.abs(x + 120) < 110) continue // Arpoador rock
@@ -182,8 +225,15 @@ function buildBeach() {
     const h = Math.max(heightAt(x, z), 1.5)
     const th = 9 + rand() * 5
     const lean = (rand() - 0.5) * 0.25
-    trunks.push({ x, y: h, z, rz: lean, sx: 0.35, sy: th, sz: 0.35, c: '#7a5a3a' })
-    crowns.push({ x: x - Math.sin(lean) * th, y: h + th, z, ry: rand() * 6, sx: 3.8, sy: 1.6, sz: 3.8, c: pick(['#3f8a3a', '#4f9a3e', '#2f7a36']) })
+    // trunks curve mostly toward the sea (+z), each by a different amount
+    const ry = -Math.PI / 2 + lean * 6 + (palmRand() - 0.5) * 0.8
+    const bend = th * (0.5 + palmRand() * 1.1)
+    const top = PALM_BEND * bend
+    const tilt = Math.atan((2 * top) / th) * 0.8
+    const size = 4.2 + palmRand() * 1.6
+    rand() // (was the old crown's rotation; keeps the shared sequence aligned)
+    trunks.push({ x, y: h - 0.3, z, ry, sx: bend, sy: th + 0.3, sz: th, c: ['#8a745a', '#7d6a52', '#96806a'][Math.floor(palmRand() * 3)] })
+    crowns.push({ x: x + Math.cos(ry) * top, y: h + th, z: z - Math.sin(ry) * top, ry, rz: -tilt, sx: size, sy: size, sz: size, c: pick(['#3f8a3a', '#4f9a3e', '#2f7a36']) })
   }
   // beach umbrellas (barracas)
   const UMB = ['#e84a4a', '#f2c230', '#2f9de0', '#f28c28', '#1f9d55', '#ffffff', '#e05aa0']
@@ -196,12 +246,12 @@ function buildBeach() {
     poles.push({ x, y: h, z, sx: 0.08, sy: 2.4, sz: 0.08, c: '#dddddd' })
     umbrellas.push({ x, y: h + 2.2, z, ry: rand() * 6, sx: 1.6, sy: 0.7, sz: 1.6, c: pick(UMB) })
   }
-  const trunkGeo = new THREE.CylinderGeometry(0.7, 1, 1, 5).translate(0, 0.5, 0)
-  const crownGeo = new THREE.ConeGeometry(1, 1, 7).rotateX(Math.PI)
+  const frondMat = flatMat()
+  frondMat.side = THREE.DoubleSide
   const coneGeo = new THREE.ConeGeometry(1, 1, 8).translate(0, 0.5, 0)
   return [
-    makeInstanced(trunkGeo, flatMat(), trunks),
-    makeInstanced(crownGeo, flatMat(), crowns),
+    makeInstanced(palmTrunkGeo(), flatMat(), trunks),
+    makeInstanced(palmCrownGeo(), frondMat, crowns),
     makeInstanced(boxGeo, flatMat(), poles, { cast: false }),
     makeInstanced(coneGeo, flatMat(), umbrellas),
   ]
