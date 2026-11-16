@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import { SUN_DIR, SUN_COLOR } from './env.js'
 import {
-  heightAt, coastZ, favelaAt, lagoaE, slopeAt, mulberry32, FAVELAS,
+  heightAt, coastZ, favelaAt, lagoaE, slopeAt, fbm, mulberry32, FAVELAS,
   CITY, cityCols, cityRows, cityTop, cityFoot,
 } from './terrain.js'
 
@@ -80,12 +80,17 @@ const TOWER_FACADE = /* glsl */ `
           winGlint = winMask * facing * mix(step(1.0 - chance, towerHash(id.yx + vSeed * 37.0)), chance, distFade);
         }`
 
+// How far favela houses are sunk into the hillside, so the downhill wall still
+// reaches the ground on steep slopes, and the steepest slope they are built on.
+const FAVELA_SINK = 4
+const FAVELA_MAX_SLOPE = 1.05
+
 // Favela houses: stacked storeys in paint, bare brick or render, slab edges,
 // small windows with the odd light on, and concrete or corrugated roofs.
 const FAVELA_FACADE = /* glsl */ `
         float winMask = 0.0;
         float winGlint = 0.0;
-        float h = vBoxPos.y - 2.5; // houses are sunk 2.5 m into the slope
+        float h = vBoxPos.y - ${FAVELA_SINK.toFixed(1)}; // houses are sunk into the slope
         float floorH = 3.0;
         if (abs(vBoxNormal.y) > 0.5) {
           // roof: mostly bare concrete slabs with a low wall-coloured rim,
@@ -103,7 +108,7 @@ const FAVELA_FACADE = /* glsl */ `
           float along = xFace ? vBoxPos.z : vBoxPos.x;
           float wallW = xFace ? vBoxSize.z : vBoxSize.x;
           float storey = floor(max(h, 0.0) / floorH);
-          float floors = floor((vBoxSize.y - 2.5) / floorH + 0.01);
+          float floors = floor((vBoxSize.y - ${FAVELA_SINK.toFixed(1)}) / floorH + 0.01);
 
           // every storey was built at a different time: upper ones are often
           // still bare brick or grey render instead of the ground floor's paint
@@ -217,42 +222,57 @@ function buildCity() {
   return makeInstanced(boxGeo, towerMat(), items)
 }
 
+// The scattered favela layout this replaced drew this many numbers from the
+// shared `rand` stream. Burning the same amount keeps everything built after
+// the favelas (umbrellas, palms, clouds, boats) exactly where it was.
+const LEGACY_FAVELA_RAND_CALLS = 58764
+
 function buildFavelas() {
-  const extraRand = mulberry32(23) // separate stream so house positions don't move
+  for (let i = 0; i < LEGACY_FAVELA_RAND_CALLS; i++) rand()
+  const fr = mulberry32(101)
   const houses = []
   const tanks = []
+  // Houses sit on a jittered grid a little tighter than a house is wide, so
+  // they touch and overlap wall to wall, and each one is turned to face
+  // downhill so rows follow the contours like terraces.
+  const STEP = 6.6
   for (const f of FAVELAS) {
-    let placed = 0, tries = 0
-    while (placed < f.count && tries < f.count * 12) {
-      tries++
-      const a = rand() * Math.PI * 2
-      const rr = Math.sqrt(rand()) * f.r
-      const x = f.x + Math.cos(a) * rr
-      const z = f.z + Math.sin(a) * rr
-      const h = heightAt(x, z)
-      if (h < f.hMin || h > f.hMax) continue
-      if (slopeAt(x, z) > 1.6) continue
-      const w = 5 + rand() * 4
-      const floors = 1 + Math.floor(rand() * rand() * 4)
-      const height = floors * 3 + 0.6
-      const ry = Math.round(rand() * 4) * (Math.PI / 2) + (rand() - 0.5) * 0.3
-      const d = w * (0.7 + rand() * 0.5)
-      houses.push({ x, y: h - 2.5, z, ry, sx: w, sy: height + 2.5, sz: d, c: pick(FAVELA_COLORS) })
-      // "puxadinho": a smaller room added on the roof later, in its own colour.
-      // Like the houses it is sunk 2.5 m (into the house below) so the shader's
-      // storey maths is the same for both.
-      let tx = x, tz = z, ty = h + height
-      if (extraRand() < 0.4) {
-        const aw = w * (0.5 + extraRand() * 0.3), ad = d * (0.5 + extraRand() * 0.3)
-        const ox = (extraRand() - 0.5) * (w - aw), oz = (extraRand() - 0.5) * (d - ad)
-        tx = x + Math.cos(ry) * ox + Math.sin(ry) * oz
-        tz = z - Math.sin(ry) * ox + Math.cos(ry) * oz
-        houses.push({ x: tx, y: ty - 2.5, z: tz, ry, sx: aw, sy: 3.6 + 2.5, sz: ad, c: FAVELA_COLORS[Math.floor(extraRand() * FAVELA_COLORS.length)] })
-        ty += 3.6
+    for (let gz = -f.r; gz <= f.r; gz += STEP) {
+      for (let gx = -f.r; gx <= f.r; gx += STEP) {
+        const x = f.x + gx + (fr() - 0.5) * STEP * 0.5
+        const z = f.z + gz + (fr() - 0.5) * STEP * 0.5
+        // ragged outline instead of a clean circle, plus the odd gap for alleys
+        const edge = Math.hypot(x - f.x, z - f.z) / f.r + fbm(x * 0.012, z * 0.012, 2) * 0.22
+        if (edge > 0.93 || fr() < 0.06) continue
+        const h = heightAt(x, z)
+        if (h < f.hMin || h > f.hMax) continue
+        const e = 4
+        const sx = (heightAt(x + e, z) - heightAt(x - e, z)) / (2 * e)
+        const sz = (heightAt(x, z + e) - heightAt(x, z - e)) / (2 * e)
+        const slope = Math.hypot(sx, sz)
+        if (slope > FAVELA_MAX_SLOPE) continue // bare rock stays bare
+        const w = 5 + fr() * 3.5
+        const d = w * (0.75 + fr() * 0.4)
+        const floors = Math.min(4, 1 + Math.floor(fr() * fr() * 4.5))
+        const height = floors * 3 + 0.6
+        // local +z points downhill; on flat ground fall back to the street grid
+        const ry = (slope > 0.06 ? Math.atan2(-sx, -sz) : Math.round(fr() * 4) * (Math.PI / 2)) + (fr() - 0.5) * 0.3
+        const c = () => FAVELA_COLORS[Math.floor(fr() * FAVELA_COLORS.length)]
+        houses.push({ x, y: h - FAVELA_SINK, z, ry, sx: w, sy: height + FAVELA_SINK, sz: d, c: c() })
+        // "puxadinho": a smaller room added on the roof later, in its own colour.
+        // Like the houses it is sunk (into the house below) so the shader's
+        // storey maths is the same for both.
+        let tx = x, tz = z, ty = h + height
+        if (fr() < 0.4) {
+          const aw = w * (0.5 + fr() * 0.3), ad = d * (0.5 + fr() * 0.3)
+          const ox = (fr() - 0.5) * (w - aw), oz = (fr() - 0.5) * (d - ad)
+          tx = x + Math.cos(ry) * ox + Math.sin(ry) * oz
+          tz = z - Math.sin(ry) * ox + Math.cos(ry) * oz
+          houses.push({ x: tx, y: ty - FAVELA_SINK, z: tz, ry, sx: aw, sy: 3.6 + FAVELA_SINK, sz: ad, c: c() })
+          ty += 3.6
+        }
+        if (fr() < 0.35) tanks.push({ x: tx + (fr() - 0.5), y: ty, z: tz + (fr() - 0.5), sx: 1.1, sy: 1.3, sz: 1.1, c: '#2f6fd0' })
       }
-      const jitter = tx === x ? 2 : 1 // keep the tank on the smaller roof
-      if (rand() < 0.35) tanks.push({ x: tx + (rand() - 0.5) * jitter, y: ty, z: tz + (rand() - 0.5) * jitter, sx: 1.1, sy: 1.3, sz: 1.1, c: '#2f6fd0' })
-      placed++
     }
   }
   const tankGeo = new THREE.CylinderGeometry(1, 1, 1, 6).translate(0, 0.5, 0)

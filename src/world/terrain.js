@@ -127,13 +127,14 @@ export function slopeAt(x, z) {
   return Math.sqrt(gx * gx + gz * gz)
 }
 
-// Hillside communities. hMin/hMax: elevation band houses cling to.
+// Hillside communities. hMin/hMax: elevation band houses cling to. Houses fill
+// the whole zone (see buildFavelas in City.jsx), so r sets how many there are.
 export const FAVELAS = [
-  { name: 'Vidigal', x: -1960, z: 10, r: 260, hMin: 6, hMax: 210, count: 1100 },
-  { name: 'Rocinha', x: -2260, z: -560, r: 400, hMin: 25, hMax: 330, count: 2200 },
-  { name: 'Cantagalo', x: -150, z: -380, r: 260, hMin: 12, hMax: 150, count: 800 },
-  { name: 'Babilônia', x: 1420, z: -190, r: 220, hMin: 12, hMax: 160, count: 550 },
-  { name: 'Santa Marta', x: 230, z: -1060, r: 200, hMin: 15, hMax: 150, count: 450 },
+  { name: 'Vidigal', x: -1960, z: 10, r: 260, hMin: 6, hMax: 210 },
+  { name: 'Rocinha', x: -2260, z: -560, r: 400, hMin: 25, hMax: 330 },
+  { name: 'Cantagalo', x: -150, z: -380, r: 260, hMin: 12, hMax: 150 },
+  { name: 'Babilônia', x: 1420, z: -190, r: 220, hMin: 12, hMax: 160 },
+  { name: 'Santa Marta', x: 230, z: -1060, r: 200, hMin: 15, hMax: 150 },
 ]
 
 export function favelaAt(x, z, pad = 0) {
