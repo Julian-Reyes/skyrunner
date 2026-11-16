@@ -47,7 +47,21 @@ export function coastZ(x) {
 }
 
 // Lagoa Rodrigo de Freitas (ellipse metric, <1 inside)
-export const lagoaE = (x, z) => ((x + 450) / 430) ** 2 + ((z + 780) / 300) ** 2
+export const LAGOA = { x: -450, z: -780, a: 430, b: 300 }
+export const lagoaE = (x, z) => ((x - LAGOA.x) / LAGOA.a) ** 2 + ((z - LAGOA.z) / LAGOA.b) ** 2
+const LAGOA_SHELF = 1.8 // height of the flat ground around the lagoon
+const LAGOA_SHORE = 1.016 // sqrt(lagoaE) at the waterline
+// Approximate metres outward from the lagoon's waterline (negative = in the water).
+export function lagoaShoreDist(x, z) {
+  const ux = (x - LAGOA.x) / LAGOA.a, uz = (z - LAGOA.z) / LAGOA.b
+  const s = Math.hypot(ux, uz)
+  if (s < 1e-4) return -LAGOA.b
+  return ((s - LAGOA_SHORE) * s) / Math.hypot(ux / LAGOA.a, uz / LAGOA.b)
+}
+
+// Jockey Club racetrack, on the flat ground west of the lagoon (ellipse, <1 inside)
+export const JOCKEY = { x: -1150, z: -800, a: 185, b: 115 }
+export const jockeyE = (x, z) => ((x - JOCKEY.x) / JOCKEY.a) ** 2 + ((z - JOCKEY.z) / JOCKEY.b) ** 2
 
 function peak(x, z, cx, cz, h, r, p = 2, sx = 1, sz = 1) {
   const dx = (x - cx) / sx, dz = (z - cz) / sz
@@ -110,10 +124,14 @@ export function heightAt(x, z) {
   }
   const e = lagoaE(x, z)
   let lagoaMask = 1
-  if (e < 1.4) {
+  if (e < 2.0) {
+    // level shelf around the lagoon (its park, cycle path and ring avenue sit
+    // here), easing back up to the natural ground further out
+    const shelf = 1 - sstep(1.35, 2.0, e)
+    base = base * (1 - shelf) + LAGOA_SHELF * shelf
     const k = 1 - sstep(0.8, 1.15, e)
     base = base * (1 - k) + -6 * k
-    lagoaMask = sstep(0.95, 1.4, e)
+    lagoaMask = sstep(1.4, 1.9, e)
   }
   // offset so gaussian tails fall below sea level and never flatten the ocean
   const m = mountains(x, z) * lagoaMask - 3
@@ -151,6 +169,7 @@ export const cityCols = Math.ceil((CITY.x1 - CITY.x0) / CITY.cell)
 export const cityRows = Math.ceil((CITY.z1 - CITY.z0) / CITY.cell)
 export const cityTop = new Float32Array(cityCols * cityRows) // building roof heights (0 = none)
 export const cityFoot = new Float32Array(cityCols * cityRows)
+export const cityPlaza = new Uint8Array(cityCols * cityRows) // 1 = block left as a leafy square
 
 export function buildingTopAt(x, z) {
   const c = Math.floor((x - CITY.x0) / CITY.cell)

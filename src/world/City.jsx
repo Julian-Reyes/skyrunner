@@ -3,8 +3,8 @@ import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import { SUN_DIR, SUN_COLOR } from './env.js'
 import {
-  heightAt, coastZ, favelaAt, lagoaE, slopeAt, fbm, mulberry32, FAVELAS,
-  CITY, cityCols, cityRows, cityTop, cityFoot,
+  heightAt, coastZ, favelaAt, lagoaE, lagoaShoreDist, slopeAt, fbm, mulberry32, FAVELAS,
+  CITY, cityCols, cityRows, cityTop, cityFoot, cityPlaza, JOCKEY, jockeyE, LAGOA,
 } from './terrain.js'
 
 const rand = mulberry32(42)
@@ -196,7 +196,14 @@ function facadeMat(key, facade) {
 const FAVELA_COLORS = ['#b5532d', '#c9713f', '#d9894f', '#a8462a', '#e3a0a4', '#e8c547', '#3fa7a0', '#4a78c2', '#ece3d3', '#7fb069', '#d65f5f', '#c2b280']
 const TOWER_COLORS = ['#efe9dc', '#e6dccb', '#f4efe6', '#d8d2c6', '#ecdcc0', '#c9d3d6', '#f0e4d0']
 
+// The first tower layout drew this many numbers from the shared `rand` stream.
+// Towers now use their own per-block stream (so editing the terrain can't
+// reshuffle them); burning the old count keeps the scenery built later
+// (umbrellas, palms, clouds, boats) exactly where it was.
+const LEGACY_CITY_RAND_CALLS = 4465
+
 function buildCity() {
+  for (let i = 0; i < LEGACY_CITY_RAND_CALLS; i++) rand()
   const items = []
   for (let r = 0; r < cityRows; r++) {
     for (let c = 0; c < cityCols; c++) {
@@ -205,21 +212,60 @@ function buildCity() {
       const d = coastZ(x) - z
       if (d < 88) continue
       if (lagoaE(x, z) < 1.45) continue
+      if (jockeyE(x, z) < 1.5) continue
       if (favelaAt(x, z, 40)) continue
       const h = heightAt(x, z)
       if (h < 0.5 || h > 16) continue
       if (slopeAt(x, z) > 0.12) continue
-      if (rand() < 0.12) continue // plazas / parks
-      const beachfront = d < 175
-      const height = beachfront ? 32 + rand() * 42 : rand() < 0.1 ? 40 + rand() * 30 : 9 + rand() * 26
-      const foot = 22 + rand() * 9
+      const cr = mulberry32(r * 7919 + c * 104729 + 17) // one stream per block
       const i = r * cityCols + c
+      if (cr() < 0.12) { // a leafy square instead of a tower
+        cityPlaza[i] = 1
+        continue
+      }
+      const beachfront = d < 175
+      const height = beachfront ? 32 + cr() * 42 : cr() < 0.1 ? 40 + cr() * 30 : 9 + cr() * 26
+      const foot = 22 + cr() * 9
       cityTop[i] = h + height
       cityFoot[i] = foot
-      items.push({ x, y: h - 1, z, sx: foot, sy: height + 1, sz: foot * (0.8 + rand() * 0.2), c: pick(TOWER_COLORS) })
+      items.push({ x, y: h - 1, z, sx: foot, sy: height + 1, sz: foot * (0.8 + cr() * 0.2), c: TOWER_COLORS[Math.floor(cr() * TOWER_COLORS.length)] })
     }
   }
   return makeInstanced(boxGeo, towerMat(), items)
+}
+
+// Trees: a row or two around the lagoon's park, and a handful in each city square.
+function buildTrees() {
+  const tr = mulberry32(77)
+  const trunks = [], crowns = []
+  const GREENS = ['#2f6b2c', '#3d7d33', '#4c8a3a', '#2a5f2f']
+  const add = (x, z) => {
+    const h = heightAt(x, z)
+    const th = 2.6 + tr() * 2.2
+    const cr = 3 + tr() * 2
+    trunks.push({ x, y: h - 0.3, z, sx: 0.32, sy: th + 0.8, sz: 0.32, c: '#5b4632' })
+    crowns.push({ x, y: h + th + cr * 0.55, z, ry: tr() * 6, sx: cr, sy: cr * (0.75 + tr() * 0.3), sz: cr, c: GREENS[Math.floor(tr() * GREENS.length)] })
+  }
+  // lagoon: jittered grid over its bounding box, kept where it falls in the tree band
+  const STEP = 10
+  for (let z = LAGOA.z - LAGOA.b - 60; z < LAGOA.z + LAGOA.b + 60; z += STEP) {
+    for (let x = LAGOA.x - LAGOA.a - 60; x < LAGOA.x + LAGOA.a + 60; x += STEP) {
+      const px = x + (tr() - 0.5) * STEP, pz = z + (tr() - 0.5) * STEP
+      const d = lagoaShoreDist(px, pz)
+      if (d < 15 || d > 25 || tr() < 0.3 || heightAt(px, pz) > 4) continue
+      add(px, pz)
+    }
+  }
+  // city squares
+  for (let i = 0; i < cityPlaza.length; i++) {
+    if (!cityPlaza[i]) continue
+    const cx = CITY.x0 + ((i % cityCols) + 0.5) * CITY.cell
+    const cz = CITY.z0 + (Math.floor(i / cityCols) + 0.5) * CITY.cell
+    const n = 5 + Math.floor(tr() * 4)
+    for (let k = 0; k < n; k++) add(cx + (tr() - 0.5) * 22, cz + (tr() - 0.5) * 22)
+  }
+  const trunkGeo = new THREE.CylinderGeometry(0.7, 1, 1, 5).translate(0, 0.5, 0)
+  return [makeInstanced(trunkGeo, flatMat(), trunks), makeInstanced(new THREE.IcosahedronGeometry(1, 0), flatMat(), crowns)]
 }
 
 // The scattered favela layout this replaced drew this many numbers from the
@@ -497,9 +543,40 @@ function CristoRedentor() {
   )
 }
 
+function JockeyStands() {
+  // grandstands along the south straight of the racetrack, facing the course
+  const z = JOCKEY.z + JOCKEY.b + 20
+  return (
+    <group>
+      {[-48, 48].map((dx) => {
+        const x = JOCKEY.x + dx
+        const y = heightAt(x, z)
+        return (
+          <group key={dx} position={[x, y, z]}>
+            <mesh position={[0, 5, 2]} castShadow>
+              <boxGeometry args={[80, 12, 12]} />
+              <meshStandardMaterial color="#e9e2d2" flatShading />
+            </mesh>
+            {/* tiered seating stepping down toward the track */}
+            <mesh position={[0, 2.5, -8]} castShadow>
+              <boxGeometry args={[80, 7, 8]} />
+              <meshStandardMaterial color="#cfc6b4" flatShading />
+            </mesh>
+            {/* roof canopy */}
+            <mesh position={[0, 12.5, -2]} castShadow>
+              <boxGeometry args={[82, 0.8, 18]} />
+              <meshStandardMaterial color="#8f9a8c" flatShading />
+            </mesh>
+          </group>
+        )
+      })}
+    </group>
+  )
+}
+
 export default function City() {
   const objects = useMemo(() => {
-    const list = [buildCity(), ...buildFavelas(), ...buildBeach(), buildClouds(), ...buildBoats()]
+    const list = [buildCity(), ...buildFavelas(), ...buildBeach(), buildClouds(), ...buildBoats(), ...buildTrees()]
     return list
   }, [])
   return (
@@ -510,6 +587,7 @@ export default function City() {
       <CableCar />
       <HangGliders />
       <CristoRedentor />
+      <JockeyStands />
     </group>
   )
 }

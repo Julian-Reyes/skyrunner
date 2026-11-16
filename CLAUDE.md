@@ -13,7 +13,7 @@ A low-poly browser flight game over Rio de Janeiro's South Zone at golden hour. 
 
 ## Architecture
 - `src/world/terrain.js` is the single source of truth for geography. `heightAt(x,z)` is analytic: coastline curve + peaks + noise. It also holds the favela zones, landmark names, the city grid, and `groundAt()` for collision. Change geography here and everything else follows (mesh, water depth, minimap, collision).
-- `src/world/Terrain.jsx` builds a 420×420 flat-shaded mesh with vertex colours chosen by height, slope, and zone.
+- `src/world/Terrain.jsx` builds a 420×420 flat-shaded mesh with vertex colours chosen by height, slope, and zone. Ground detail is drawn on top in the fragment shader (`GROUND_FRAG`): streets only along block edges that have a tower, plots under towers, grass squares, the Jockey Club racetrack, the lagoon's park / cycle path / ring avenue, and the Copacabana wave promenade. It is driven by the per-vertex `aGround` and `aLake` attributes and a one-texel-per-block `uCityMap` texture filled from `cityTop` / `cityFoot` / `cityPlaza`.
 - `src/world/Water.jsx` is a custom ShaderMaterial ocean: vertex waves, faceted normals via dFdx/dFdy, bathymetry baked to a DataTexture for depth colour and shore foam, fresnel, sun glint, and three.js fog chunks.
 - `src/world/Sky.jsx` is a gradient sky dome whose horizon colour equals the fog colour (see `env.js`) so the fog blends seamlessly.
 - `src/world/City.jsx` builds everything instanced: tower blocks (which also fill `cityTop` for collision), favela houses with blue water tanks, palms, beach umbrellas, clouds, boats, the Pão de Açúcar cable car, hang gliders over São Conrado, and Christ the Redeemer on the Corcovado summit. Tower and favela facades (windows, lit glass, storeys, base shading, roofs) are drawn in the fragment shader via `facadeMat()` with the `TOWER_FACADE` / `FAVELA_FACADE` GLSL chunks; the buildings themselves are still plain instanced boxes. Extra scenery detail uses its own `mulberry32` stream so the shared `rand` sequence, and therefore the city layout, doesn't shift.
@@ -29,7 +29,7 @@ A low-poly browser flight game over Rio de Janeiro's South Zone at golden hour. 
 - Game state is one mutable object (`game` in `game.js`). Don't put per-frame values in React state.
 - New scenery goes through `makeInstanced()` in City.jsx; don't add thousands of meshes.
 - Keep the low-poly look: `flatShading`, low segment counts, no textures unless deliberate.
-- Seeded RNG (`mulberry32`) keeps the city identical on every load.
+- Seeded RNG (`mulberry32`) keeps the city identical on every load. Towers use one stream per block, and favelas, trees and palm extras have their own streams, so editing one thing doesn't reshuffle the others.
 
 ## Ideas / next steps
 - Touch controls (virtual stick + boost button) so it plays on phones

@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
-import { heightAt, MAP_SIZE } from './terrain.js'
+import { heightAt, MAP_SIZE, LAGOA } from './terrain.js'
 import { SUN_DIR, SUN_COLOR, HORIZON, ZENITH } from './env.js'
 
 // Faceted low-poly ocean: vertex waves, depth-based colour from a baked
@@ -16,7 +16,9 @@ const vert = /* glsl */ `
     float w = sin(wp.x * 0.018 + uTime * 1.1) * 0.7
             + sin(wp.z * 0.025 - uTime * 0.9) * 0.6
             + sin((wp.x + wp.z) * 0.043 + uTime * 1.7) * 0.3;
-    wp.y += w;
+    // the lagoon is sheltered: barely any swell
+    vec2 lq = (wp.xz - vec2(${LAGOA.x.toFixed(1)}, ${LAGOA.z.toFixed(1)})) / vec2(${LAGOA.a.toFixed(1)}, ${LAGOA.b.toFixed(1)});
+    wp.y += w * mix(0.1, 1.0, smoothstep(1.15, 1.6, dot(lq, lq)));
     vWorld = wp.xyz;
     vec4 mvPosition = viewMatrix * wp;
     gl_Position = projectionMatrix * mvPosition;
@@ -87,12 +89,17 @@ const frag = /* glsl */ `
     wave(normalize(vec2(-0.10, -1.00)), 7.3, 0.07, warp * 2.9, xz, dist, slope, crest);
     wave(normalize(vec2(0.85, -0.50)), 4.1, 0.06, warp * 3.7, xz, dist, slope, crest);
     float calm = 0.35 + 0.65 * smoothstep(0.3, 6.0, depth); // gentler in the shallows
+    // the lagoon: sheltered flat water, darker and greener than the sea, no surf
+    vec2 lq = (xz - vec2(${LAGOA.x.toFixed(1)}, ${LAGOA.z.toFixed(1)})) / vec2(${LAGOA.a.toFixed(1)}, ${LAGOA.b.toFixed(1)});
+    float lagoon = 1.0 - smoothstep(1.15, 1.5, dot(lq, lq));
+    calm *= mix(1.0, 0.3, lagoon);
     slope *= calm;
     crest *= calm / 0.49; // roughly -1..1
     vec3 nw = normalize(n + vec3(-slope.x, 0.0, -slope.y));
 
     // body colour: turquoise shallows to deep blue, with slow large-scale variation
     vec3 body = mix(uShallow, uDeep, smoothstep(0.5, 16.0, depth));
+    body = mix(body, vec3(0.03, 0.20, 0.19), lagoon * 0.75);
     body *= 0.92 + 0.16 * vnoise(xz * 0.0025 + uTime * 0.01);
     // relief: wave faces turned toward the low sun are brighter and warmer, the
     // backs darker; crests are thinner water so they glow a little lighter
@@ -119,13 +126,13 @@ const frag = /* glsl */ `
     col += uSunColor * (spec * 1.6 + spark * 5.0);
 
     // a few whitecaps where the wave trains pile up
-    float cap = smoothstep(0.5, 0.8, crest) * smoothstep(0.45, 0.75, vnoise(xz * 0.35 + uTime * 0.15)) * near;
+    float cap = (1.0 - lagoon) * smoothstep(0.5, 0.8, crest) * smoothstep(0.45, 0.75, vnoise(xz * 0.35 + uTime * 0.15)) * near;
     col = mix(col, vec3(1.0, 0.98, 0.94), cap * 0.7);
 
     // shore break: uneven foam lines rolling in, sharp at the front and fading
     // behind, with lacy gaps, plus a wash right at the waterline
     float fn = vnoise(xz * 0.06 + vec2(uTime * 0.05, 0.0));
-    float band = 1.0 - smoothstep(0.3, 3.2, depth);
+    float band = (1.0 - lagoon) * (1.0 - smoothstep(0.3, 3.2, depth));
     float s = fract((depth * 4.0 + uTime * 2.2 + fn * 1.8) / 6.2832);
     float line = smoothstep(0.0, 0.05, s) * (1.0 - smoothstep(0.1, 0.45, s));
     float lace = smoothstep(0.3, 0.7, vnoise(xz * 0.5 + uTime * 0.2));
