@@ -11,7 +11,7 @@ const COURSE_DEF = [
   { name: 'Pão de Açúcar · mar', x: 2230, z: 150, abs: 120 },
   { name: 'Pão de Açúcar · topo', x: 2060, z: -70, off: 38 },
   { name: 'Botafogo', x: 1100, z: -800, abs: 300 },
-  { name: 'Corcovado', x: 340, z: -1480, off: 55 },
+  { name: 'Corcovado', x: 340, z: -1480, off: 88 }, // clears the statue (top ≈ 55 m)
   { name: 'Lagoa', x: -380, z: -800, abs: 30 },
   { name: 'Cantagalo', x: -160, z: -390, off: 40 },
   { name: 'Leblon', x: -1350, z: -90, off: 24 },

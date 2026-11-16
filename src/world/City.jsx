@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
+import { SUN_DIR, SUN_COLOR } from './env.js'
 import {
   heightAt, coastZ, favelaAt, lagoaE, slopeAt, mulberry32, FAVELAS,
   CITY, cityCols, cityRows, cityTop, cityFoot,
@@ -33,6 +34,89 @@ function makeInstanced(geometry, material, items, { cast = true, receive = true 
 const boxGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0)
 const flatMat = () => new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.9 })
 
+// Tower facades: windows, ground-floor band, base shading and roof tone are all
+// drawn in the fragment shader from the wall position, so the towers stay plain
+// instanced boxes. Windows fade to their average tone with distance (no moire),
+// and some upper windows on sun-facing walls catch the sunset and bloom.
+function towerMat() {
+  const mat = flatMat()
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uSunDir = { value: SUN_DIR }
+    shader.uniforms.uSunColor = { value: SUN_COLOR }
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', /* glsl */ `#include <common>
+        varying vec3 vBoxPos;
+        varying vec3 vBoxSize;
+        varying vec3 vBoxNormal;
+        varying float vSeed;`)
+      .replace('#include <begin_vertex>', /* glsl */ `#include <begin_vertex>
+        vBoxSize = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+        vBoxPos = position * vBoxSize;
+        vBoxNormal = normal;
+        vSeed = fract(sin(dot(instanceMatrix[3].xz, vec2(12.9898, 78.233))) * 43758.5453);`)
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', /* glsl */ `#include <common>
+        uniform vec3 uSunDir;
+        uniform vec3 uSunColor;
+        varying vec3 vBoxPos;
+        varying vec3 vBoxSize;
+        varying vec3 vBoxNormal;
+        varying float vSeed;
+        float towerHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }`)
+      .replace('#include <color_fragment>', /* glsl */ `#include <color_fragment>
+        float winMask = 0.0;
+        float winGlint = 0.0;
+        if (abs(vBoxNormal.y) > 0.5) {
+          // roof: gravel tone with a lighter parapet around the edge
+          vec2 edge = 0.5 * vBoxSize.xz - abs(vBoxPos.xz);
+          float parapet = 1.0 - smoothstep(0.9, 1.3, min(edge.x, edge.y));
+          diffuseColor.rgb = mix(mix(diffuseColor.rgb, vec3(0.46, 0.45, 0.43), 0.55), diffuseColor.rgb, parapet);
+        } else {
+          bool xFace = abs(vBoxNormal.x) > 0.5;
+          float along = xFace ? vBoxPos.z : vBoxPos.x;
+          float wallW = xFace ? vBoxSize.z : vBoxSize.x;
+          float h = vBoxPos.y - 1.0; // boxes start 1 m below ground
+          float floorH = 3.1 + vSeed * 0.5;
+          float bays = max(1.0, floor(wallW / (2.3 + fract(vSeed * 7.0) * 1.2)));
+          float floors = floor((vBoxSize.y - 1.8) / floorH);
+          vec2 cell = vec2((along / wallW + 0.5) * bays, h / floorH);
+          vec2 id = floor(cell);
+          vec2 f = cell - id;
+          vec2 fw = fwidth(cell);
+          float rows = step(1.0, id.y) * step(id.y, floors - 1.0);
+
+          // some towers have ribbon windows instead of punched ones
+          float mx = fract(vSeed * 13.0) > 0.72 ? -1.0 : 0.17;
+          float wx = smoothstep(mx - fw.x, mx + fw.x, f.x) * (1.0 - smoothstep(1.0 - mx - fw.x, 1.0 - mx + fw.x, f.x));
+          float wy = smoothstep(0.30 - fw.y, 0.30 + fw.y, f.y) * (1.0 - smoothstep(0.80 - fw.y, 0.80 + fw.y, f.y));
+          float coverX = mx < 0.0 ? 1.0 : 0.66;
+          float distFade = smoothstep(0.3, 0.8, max(fw.x, fw.y));
+          winMask = rows * mix(wx * wy, coverX * 0.5, distFade);
+
+          // glass: dark blue-grey, a little different in every window (blinds, curtains)
+          float r = towerHash(id + vSeed * 91.0);
+          vec3 glass = mix(vec3(0.07, 0.10, 0.15), vec3(0.20, 0.24, 0.30), mix(r, 0.5, distFade));
+
+          // ground floor reads as shopfronts; walls darken toward the street
+          float street = 1.0 - step(1.0, id.y);
+          diffuseColor.rgb *= mix(0.62, 1.0, smoothstep(0.0, 14.0, h)) * mix(1.0, 0.82, street);
+          diffuseColor.rgb = mix(diffuseColor.rgb, glass, winMask);
+
+          // sunset caught in upper windows facing the sun
+          float facing = smoothstep(0.15, 0.7, dot(vBoxNormal, uSunDir));
+          float high = smoothstep(0.35, 0.95, h / vBoxSize.y);
+          float chance = 0.16 * high;
+          winGlint = winMask * facing * mix(step(1.0 - chance, towerHash(id.yx + vSeed * 37.0)), chance, distFade);
+        }`)
+      .replace('#include <roughnessmap_fragment>', /* glsl */ `#include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, 0.5, winMask);`)
+      .replace('#include <emissivemap_fragment>', /* glsl */ `#include <emissivemap_fragment>
+        totalEmissiveRadiance += uSunColor * winGlint * 1.8;`)
+  }
+  mat.customProgramCacheKey = () => 'tower-facade'
+  return mat
+}
+
 const FAVELA_COLORS = ['#b5532d', '#c9713f', '#d9894f', '#a8462a', '#e3a0a4', '#e8c547', '#3fa7a0', '#4a78c2', '#ece3d3', '#7fb069', '#d65f5f', '#c2b280']
 const TOWER_COLORS = ['#efe9dc', '#e6dccb', '#f4efe6', '#d8d2c6', '#ecdcc0', '#c9d3d6', '#f0e4d0']
 
@@ -59,7 +143,7 @@ function buildCity() {
       items.push({ x, y: h - 1, z, sx: foot, sy: height + 1, sz: foot * (0.8 + rand() * 0.2), c: pick(TOWER_COLORS) })
     }
   }
-  return makeInstanced(boxGeo, flatMat(), items)
+  return makeInstanced(boxGeo, towerMat(), items)
 }
 
 function buildFavelas() {
@@ -216,19 +300,43 @@ function HangGliders() {
   )
 }
 
-function SummitBeacon() {
-  // Glowing marker on the Corcovado summit (lookout point)
+function CristoRedentor() {
+  // Christ the Redeemer on the Corcovado summit: a few flat-shaded primitives,
+  // arms spread north-south, facing east toward Pão de Açúcar. Drawn at about
+  // twice true size so it reads from across the city; the top is ~55 m above the
+  // summit, and the Corcovado ring in game.js (88 m up, radius 20) clears it.
   const y = heightAt(340, -1480)
   return (
-    <group position={[340, y, -1480]}>
-      <mesh position={[0, 6, 0]} castShadow>
-        <cylinderGeometry args={[7, 9, 12, 8]} />
+    <group position={[340, y, -1480]} rotation={[0, Math.PI / 2, 0]}>
+      {/* lookout platform, sunk into the peak so its rim never floats */}
+      <mesh position={[0, -1, 0]} castShadow>
+        <cylinderGeometry args={[7, 9, 14, 8]} />
         <meshStandardMaterial color="#ddd6c8" flatShading />
       </mesh>
-      <mesh position={[0, 18, 0]}>
-        <octahedronGeometry args={[4, 0]} />
-        <meshStandardMaterial color="#fff2c0" emissive="#ffd27a" emissiveIntensity={6} toneMapped={false} />
+      {/* pedestal + figure, scaled up from the platform top (y = 6) */}
+      <group position={[0, 6, 0]} scale={1.9}>
+      <group position={[0, -6, 0]}>
+      <mesh position={[0, 9, 0]} castShadow>
+        <cylinderGeometry args={[2.6, 3.4, 6, 6]} />
+        <meshStandardMaterial color="#cfc8ba" flatShading />
       </mesh>
+        {/* robe */}
+        <mesh position={[0, 20.5, 0]} castShadow>
+          <cylinderGeometry args={[1.5, 2.7, 17, 6]} />
+          <meshStandardMaterial color="#f1ede2" emissive="#ffd9a8" emissiveIntensity={0.3} flatShading />
+        </mesh>
+        {/* outstretched arms */}
+        <mesh position={[0, 26.4, 0]} castShadow>
+          <boxGeometry args={[21, 1.5, 1.6]} />
+          <meshStandardMaterial color="#f1ede2" emissive="#ffd9a8" emissiveIntensity={0.3} flatShading />
+        </mesh>
+        {/* head */}
+        <mesh position={[0, 30.4, 0.1]} castShadow>
+          <icosahedronGeometry args={[1.35, 0]} />
+          <meshStandardMaterial color="#f1ede2" emissive="#ffd9a8" emissiveIntensity={0.3} flatShading />
+        </mesh>
+      </group>
+      </group>
     </group>
   )
 }
@@ -245,7 +353,7 @@ export default function City() {
       ))}
       <CableCar />
       <HangGliders />
-      <SummitBeacon />
+      <CristoRedentor />
     </group>
   )
 }
