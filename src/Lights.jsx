@@ -4,21 +4,31 @@ import * as THREE from 'three'
 import { SUN_DIR, SUN_COLOR, FOG_COLOR, FOG_NEAR, FOG_FAR } from './world/env.js'
 import { game } from './game.js'
 
+const TITLE_FOCUS = new THREE.Vector3(0, 0, -300)
+
 export default function Lights() {
   const sun = useRef()
-  const { scene } = useThree()
+  const { scene, gl } = useThree()
+  const frame = useRef(0)
   useEffect(() => {
     scene.fog = new THREE.Fog(FOG_COLOR, FOG_NEAR, FOG_FAR)
     scene.add(sun.current.target)
-  }, [scene])
+    // The shadow map is re-rendered on demand (see below) instead of every frame.
+    gl.shadowMap.autoUpdate = false
+    gl.shadowMap.needsUpdate = true
+    return () => { gl.shadowMap.autoUpdate = true }
+  }, [scene, gl])
 
   // shadow frustum follows the player (or the title camera's focus)
-  useFrame(({ camera }) => {
-    const focus = game.phase === 'title' ? new THREE.Vector3(0, 0, -300) : game.pos
+  useFrame(() => {
+    const big = game.phase === 'title'
+    const focus = big ? TITLE_FOCUS : game.pos
     const s = sun.current
     s.target.position.copy(focus)
     s.position.copy(focus).addScaledVector(SUN_DIR, 1500)
-    const big = game.phase === 'title'
+    // On the title screen the light and nearly all casters are static, so the
+    // shadow map only needs an occasional refresh. In flight it follows the plane.
+    let redraw = !big || frame.current++ % 10 === 0
     const cam = s.shadow.camera
     const size = big ? 2200 : 450
     if (cam.right !== size) {
@@ -27,7 +37,9 @@ export default function Lights() {
       cam.top = size
       cam.bottom = -size
       cam.updateProjectionMatrix()
+      redraw = true
     }
+    if (redraw) gl.shadowMap.needsUpdate = true
   })
 
   return (

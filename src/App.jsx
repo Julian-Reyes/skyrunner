@@ -1,5 +1,6 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { PerformanceMonitor } from '@react-three/drei'
 import { EffectComposer, Bloom, Vignette, ToneMapping, SMAA } from '@react-three/postprocessing'
 import { ToneMappingMode } from 'postprocessing'
 import * as THREE from 'three'
@@ -29,7 +30,24 @@ function MobileCamera() {
   return null
 }
 
+// Resolution is the biggest GPU cost: every pixel goes through lighting, soft
+// shadows, bloom and SMAA. Start at up to 1.5x and step down (never back up, so
+// it can't oscillate) whenever the machine can't hold ~50 fps.
+const MAX_DPR = 1.5
+const MIN_DPR = 1
+
+function AdaptiveResolution({ composer, onDecline }) {
+  const dpr = useThree((s) => s.viewport.dpr)
+  // The post-processing buffers only follow canvas size, not pixel ratio.
+  useEffect(() => { composer.current?.setSize() }, [composer, dpr])
+  return <PerformanceMonitor bounds={() => [50, Infinity]} onDecline={onDecline} />
+}
+
 export default function App() {
+  const composer = useRef()
+  const [dpr, setDpr] = useState(() => Math.min(window.devicePixelRatio || 1, MAX_DPR))
+  const lowerDpr = () => setDpr((d) => Math.max(MIN_DPR, d - 0.25))
+
   useEffect(() => {
     let frame
     const refreshViewport = () => {
@@ -61,11 +79,12 @@ export default function App() {
         className="game-canvas"
         style={{ position: 'fixed', inset: 0 }}
         shadows={{ type: THREE.PCFSoftShadowMap }}
-        dpr={[1, 1.75]}
+        dpr={dpr}
         gl={{ antialias: false, powerPreference: 'high-performance', stencil: false }}
         camera={{ fov: 60, near: 0.5, far: 12000, position: [0, 400, 1500] }}
       >
         <MobileCamera />
+        <AdaptiveResolution composer={composer} onDecline={lowerDpr} />
         <Sky />
         <Lights />
         <Terrain />
@@ -74,7 +93,7 @@ export default function App() {
         <Rings />
         <Plane />
         <AudioTick />
-        <EffectComposer multisampling={0} disableNormalPass>
+        <EffectComposer ref={composer} multisampling={0} disableNormalPass>
           <Bloom mipmapBlur intensity={0.7} luminanceThreshold={0.85} luminanceSmoothing={0.2} />
           <Vignette offset={0.25} darkness={0.55} />
           <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
