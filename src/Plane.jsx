@@ -4,7 +4,8 @@ import { Trail } from '@react-three/drei'
 import * as THREE from 'three'
 import { game, keys, respawn } from './game.js'
 import { touchInput } from './input.js'
-import { groundAt, landmarkAt } from './world/terrain.js'
+import { groundAt, heightAt, landmarkAt } from './world/terrain.js'
+import { SUN_DIR } from './world/env.js'
 
 const X = new THREE.Vector3(1, 0, 0)
 const Y = new THREE.Vector3(0, 1, 0)
@@ -19,17 +20,80 @@ const lookTarget = new THREE.Vector3()
 const camUp = new THREE.Vector3()
 
 const input = { pitch: 0, roll: 0, yaw: 0 }
+
+// ---- blob shadow -----------------------------------------------------------
+// The shadow map only holds static scenery (see Lights.jsx), so the plane's own
+// shadow is a soft dark quad placed where the sun ray through the plane meets
+// the ground. The sun is low, so that point is ~5x the plane's height away.
+const SHADOW_RANGE = 700
+const SHADOW_OPACITY = 0.45
+const sunFlat = new THREE.Vector3(-SUN_DIR.x, 0, -SUN_DIR.z).normalize()
+const sp = new THREE.Vector3()
+const sn = new THREE.Vector3()
+const sx = new THREE.Vector3()
+const sy = new THREE.Vector3()
+const sm = new THREE.Matrix4()
+const shadowVert = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`
+const shadowFrag = /* glsl */ `
+  uniform float uOpacity;
+  varying vec2 vUv;
+  void main() {
+    float d = length(vUv - 0.5) * 2.0;
+    gl_FragColor = vec4(0.04, 0.05, 0.09, (1.0 - smoothstep(0.5, 1.0, d)) * uOpacity);
+  }
+`
+
+function placeShadow(mesh, pos) {
+  mesh.visible = false
+  // march from the plane away from the sun until the ray meets the ground
+  sp.copy(pos)
+  let t = 0
+  let hit = false
+  for (let i = 0; i < 48; i++) {
+    const above = sp.y - groundAt(sp.x, sp.z)
+    if (above < 0.5) { hit = true; break }
+    const step = Math.max(1, above * 0.8)
+    t += step
+    if (t > SHADOW_RANGE) return
+    sp.addScaledVector(SUN_DIR, -step)
+  }
+  if (!hit) return
+  const terrain = heightAt(sp.x, sp.z)
+  const ground = groundAt(sp.x, sp.z)
+  if (ground <= 0.01) return // the ocean doesn't receive shadows
+  if (ground > terrain + 0.1) sn.set(0, 1, 0) // rooftop
+  else {
+    const e = 3
+    sn.set(heightAt(sp.x - e, sp.z) - heightAt(sp.x + e, sp.z), 2 * e, heightAt(sp.x, sp.z - e) - heightAt(sp.x, sp.z + e)).normalize()
+  }
+  if (sn.dot(SUN_DIR) <= 0.02) return // slope faces away from the sun: already dark
+  // lie flat on the surface, long axis pointing away from the sun
+  sx.copy(sunFlat).addScaledVector(sn, -sunFlat.dot(sn)).normalize()
+  sy.crossVectors(sn, sx)
+  mesh.quaternion.setFromRotationMatrix(sm.makeBasis(sx, sy, sn))
+  mesh.position.set(sp.x, ground, sp.z).addScaledVector(sn, 0.35)
+  const spread = 1 + t / 400 // penumbra widens with distance
+  mesh.scale.set(16 * spread, 13 * spread, 1)
+  mesh.material.uniforms.uOpacity.value = SHADOW_OPACITY * (1 - THREE.MathUtils.smoothstep(t, 250, SHADOW_RANGE))
+  mesh.visible = true
+}
 const approach = (cur, target, rate, dt) => cur + (target - cur) * (1 - Math.exp(-rate * dt))
 
 function PlaneModel({ propRef }) {
   // Low-poly bush plane in Brazil colours. Nose points to -Z.
   return (
     <group>
-      <mesh castShadow position={[0, 0, 0]}>
+      <mesh position={[0, 0, 0]}>
         <boxGeometry args={[1.5, 1.5, 7]} />
         <meshStandardMaterial color="#f2c230" flatShading roughness={0.5} />
       </mesh>
-      <mesh castShadow position={[0, 0, -4]} rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh position={[0, 0, -4]} rotation={[-Math.PI / 2, 0, 0]}>
         <cylinderGeometry args={[0.35, 0.95, 1.2, 6]} />
         <meshStandardMaterial color="#1f9d55" flatShading />
       </mesh>
@@ -37,7 +101,7 @@ function PlaneModel({ propRef }) {
         <boxGeometry args={[1.2, 0.6, 1.8]} />
         <meshStandardMaterial color="#1b2a3a" roughness={0.1} metalness={0.4} />
       </mesh>
-      <mesh castShadow position={[0, 0.2, -0.8]}>
+      <mesh position={[0, 0.2, -0.8]}>
         <boxGeometry args={[12, 0.22, 2.1]} />
         <meshStandardMaterial color="#1f9d55" flatShading />
       </mesh>
@@ -45,11 +109,11 @@ function PlaneModel({ propRef }) {
         <boxGeometry args={[2.2, 0.05, 2.12]} />
         <meshStandardMaterial color="#2a4fb8" flatShading />
       </mesh>
-      <mesh castShadow position={[0, 0.3, 3.4]}>
+      <mesh position={[0, 0.3, 3.4]}>
         <boxGeometry args={[4.2, 0.18, 1.1]} />
         <meshStandardMaterial color="#1f9d55" flatShading />
       </mesh>
-      <mesh castShadow position={[0, 1.1, 3.4]}>
+      <mesh position={[0, 1.1, 3.4]}>
         <boxGeometry args={[0.18, 1.9, 1.3]} />
         <meshStandardMaterial color="#2a4fb8" flatShading />
       </mesh>
@@ -67,6 +131,8 @@ export default function Plane() {
   const group = useRef()
   const propRef = useRef()
   const boom = useRef()
+  const shadow = useRef()
+  const shadowUniforms = useMemo(() => ({ uOpacity: { value: 0 } }), [])
   const { camera } = useThree()
   const tipL = useRef(), tipR = useRef()
   const boomMat = useMemo(() => new THREE.MeshBasicMaterial({ color: '#ffb347', transparent: true, toneMapped: false }), [])
@@ -78,6 +144,7 @@ export default function Plane() {
 
     if (g.phase === 'title') {
       group.current.visible = false
+      shadow.current.visible = false
       const t = state.clock.elapsedTime * 0.04
       camera.position.set(Math.cos(t) * 1700 - 300, 380 + Math.sin(t * 2) * 60, Math.sin(t) * 1100 + 500)
       camera.up.set(0, 1, 0)
@@ -165,6 +232,7 @@ export default function Plane() {
       g.events.push('crash')
       g.message = dist > 3600 ? 'Out of airspace' : ground <= 0.01 ? 'Splash! Into the Atlantic' : 'Crashed!'
       g.messageT = 1.6
+      shadow.current.visible = false
       boom.current.position.copy(g.pos)
       boom.current.visible = true
     }
@@ -176,6 +244,7 @@ export default function Plane() {
     group.current.position.copy(g.pos)
     group.current.quaternion.copy(q)
     propRef.current.rotation.z += dt * (30 + g.speed)
+    if (g.phase !== 'crashed') placeShadow(shadow.current, g.pos)
 
     // ---- chase camera ------------------------------------------------------
     const back = g.boosting ? 23 : 20
@@ -211,6 +280,11 @@ export default function Plane() {
           </mesh>
         </Trail>
       </group>
+      <mesh ref={shadow} visible={false}>
+        <planeGeometry args={[1, 1]} />
+        <shaderMaterial vertexShader={shadowVert} fragmentShader={shadowFrag} uniforms={shadowUniforms}
+          transparent depthWrite={false} polygonOffset polygonOffsetFactor={-2} polygonOffsetUnits={-2} />
+      </mesh>
       <mesh ref={boom} visible={false} material={boomMat}>
         <icosahedronGeometry args={[1, 1]} />
       </mesh>

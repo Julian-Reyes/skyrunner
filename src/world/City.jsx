@@ -180,7 +180,7 @@ function CableCar() {
     <group>
       <primitive object={line} />
       {[car1, car2].map((r, i) => (
-        <mesh key={i} ref={r} castShadow>
+        <mesh key={i} ref={r}>
           <boxGeometry args={[5, 4, 7]} />
           <meshStandardMaterial color="#e84a2a" flatShading />
         </mesh>
@@ -207,7 +207,7 @@ function HangGliders() {
   return (
     <group ref={ref}>
       {gliders.map((g, i) => (
-        <mesh key={i} castShadow>
+        <mesh key={i}>
           <coneGeometry args={[5, 1.2, 3]} />
           <meshStandardMaterial color={g.c} flatShading />
         </mesh>

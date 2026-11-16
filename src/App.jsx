@@ -31,9 +31,9 @@ function MobileCamera() {
 }
 
 // Resolution is the biggest GPU cost: every pixel goes through lighting, soft
-// shadows, bloom and SMAA. Start at up to 1.5x and step down (never back up, so
+// shadows, bloom and SMAA. Start at up to 1.25x and step down (never back up, so
 // it can't oscillate) whenever the machine can't hold ~50 fps.
-const MAX_DPR = 1.5
+const MAX_DPR = 1.25
 const MIN_DPR = 1
 
 function AdaptiveResolution({ composer, onDecline }) {
