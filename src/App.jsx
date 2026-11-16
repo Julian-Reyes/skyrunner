@@ -13,6 +13,7 @@ import Rings from './Rings.jsx'
 import Lights from './Lights.jsx'
 import HUD from './ui/HUD.jsx'
 import { updateAudio } from './audio.js'
+import { QUALITY_LEVELS, AUTO_START, AUTO_FALLBACK, loadQuality, saveQuality } from './quality.js'
 
 function AudioTick() {
   useFrame(() => updateAudio())
@@ -30,23 +31,40 @@ function MobileCamera() {
   return null
 }
 
-// Resolution is the biggest GPU cost: every pixel goes through lighting, soft
-// shadows, bloom and SMAA. Start at up to 1.25x and step down (never back up, so
-// it can't oscillate) whenever the machine can't hold ~50 fps.
-const MAX_DPR = 1.25
-const MIN_DPR = 1
-
-function AdaptiveResolution({ composer, onDecline }) {
+// Applies the parts of a quality level that R3F doesn't handle by itself, and
+// reports when the machine can't hold ~50 fps (used by the Auto setting).
+function QualitySync({ composer, shadowType, onDecline }) {
   const dpr = useThree((s) => s.viewport.dpr)
+  const gl = useThree((s) => s.gl)
+  const scene = useThree((s) => s.scene)
   // The post-processing buffers only follow canvas size, not pixel ratio.
   useEffect(() => { composer.current?.setSize() }, [composer, dpr])
+  // The shadow filter is compiled into every lit material's shader.
+  useEffect(() => {
+    gl.shadowMap.type = shadowType
+    gl.shadowMap.needsUpdate = true
+    scene.traverse((o) => {
+      if (!o.material) return
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.needsUpdate = true
+    })
+  }, [gl, scene, shadowType])
   return <PerformanceMonitor bounds={() => [50, Infinity]} onDecline={onDecline} />
 }
 
 export default function App() {
   const composer = useRef()
-  const [dpr, setDpr] = useState(() => Math.min(window.devicePixelRatio || 1, MAX_DPR))
-  const lowerDpr = () => setDpr((d) => Math.max(MIN_DPR, d - 0.25))
+  // `quality` is the player's choice; `level` is what is actually running
+  // (they differ only on Auto, which starts at medium and can fall back to low).
+  const [quality, setQuality] = useState(loadQuality)
+  const [autoLevel, setAutoLevel] = useState(AUTO_START)
+  const level = quality === 'auto' ? autoLevel : quality
+  const q = QUALITY_LEVELS[level]
+  const dpr = Math.min(window.devicePixelRatio || 1, q.maxDpr)
+  const chooseQuality = (choice) => {
+    saveQuality(choice)
+    setQuality(choice)
+    setAutoLevel(AUTO_START) // re-measure when switching back to Auto
+  }
 
   useEffect(() => {
     let frame
@@ -78,15 +96,15 @@ export default function App() {
       <Canvas
         className="game-canvas"
         style={{ position: 'fixed', inset: 0 }}
-        shadows={{ type: THREE.PCFSoftShadowMap }}
+        shadows={{ type: q.shadowType }}
         dpr={dpr}
         gl={{ antialias: false, powerPreference: 'high-performance', stencil: false }}
         camera={{ fov: 60, near: 0.5, far: 12000, position: [0, 400, 1500] }}
       >
         <MobileCamera />
-        <AdaptiveResolution composer={composer} onDecline={lowerDpr} />
+        <QualitySync composer={composer} shadowType={q.shadowType} onDecline={() => setAutoLevel(AUTO_FALLBACK)} />
         <Sky />
-        <Lights />
+        <Lights shadowMapSize={q.shadowMap} />
         <Terrain />
         <Water />
         <City />
@@ -97,10 +115,10 @@ export default function App() {
           <Bloom mipmapBlur intensity={0.7} luminanceThreshold={0.85} luminanceSmoothing={0.2} />
           <Vignette offset={0.25} darkness={0.55} />
           <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-          <SMAA />
+          <SMAA preset={q.smaa} />
         </EffectComposer>
       </Canvas>
-      <HUD />
+      <HUD quality={quality} level={level} onQuality={chooseQuality} />
     </>
   )
 }

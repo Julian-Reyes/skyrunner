@@ -20,6 +20,8 @@ A low-poly browser flight game over Rio de Janeiro's South Zone at golden hour. 
 - `src/Plane.jsx` holds the plane model, the arcade flight model (bank-to-turn, energy/gravity along the flight path, stall), collision, and the chase camera.
 - `src/Rings.jsx` has the ring course, pass detection, and the guide arrow. The course itself is defined in `src/game.js` (`COURSE_DEF`).
 - `src/ui/HUD.jsx` is a DOM overlay (title, timer, gauges, minimap canvas, landmark toasts). It reads the mutable `game` object on rAF, so there's no React state in the hot path.
+- `src/quality.js` defines the Low / Medium / High graphics levels (pixel-ratio cap, shadow map size and filter, SMAA preset) and saves the player's choice. `App.jsx` applies the active level; Auto starts at Medium and falls back to Low if the frame rate stays under about 50 fps. The picker is on the title screen.
+- `src/Lights.jsx` re-renders the sun shadow map only when the plane has moved 64 m (static casters only). The plane's own shadow is a blob quad in `Plane.jsx`. Don't give moving objects `castShadow`.
 - `src/audio.js` is procedural WebAudio (engine drone, wind, blips). It starts on the first button click.
 - Post-processing lives in `App.jsx`: Bloom, Vignette, ACES tone mapping, SMAA. Materials that should glow use `toneMapped={false}` and emissive values above 1.
 

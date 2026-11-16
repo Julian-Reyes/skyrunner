@@ -46,6 +46,12 @@ button:hover { transform: translateY(-2px); background: rgba(255, 255, 255, 0.2)
 button.primary { background: #f2c230; color: #10321f; border-color: #f2c230; }
 button.primary:hover { background: #ffd54a; }
 .best { margin-top: 14px; font-size: 14px; color: #ffe7b8; }
+.quality { margin-top: 18px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.quality .qlabel { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.7; margin-right: 4px; }
+.quality .qnote { opacity: 0.7; margin-left: 4px; }
+.quality button { padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; backdrop-filter: none; }
+.quality button:hover { transform: none; }
+.quality button.on { background: #fff; color: #10321f; border-color: #fff; }
 .controls { margin-top: 26px; display: grid; gap: 6px; font-size: 13px; color: rgba(255, 255, 255, 0.8); }
 kbd {
   display: inline-block; min-width: 22px; padding: 1px 6px; margin-right: 4px; border-radius: 5px;
@@ -160,6 +166,7 @@ kbd {
   .touch-ui .kicker { font-size: 10px; margin-bottom: 6px; }
   .touch-ui .sub { margin: 10px 0 14px; font-size: 13px; }
   .touch-ui .controls { margin-top: 14px; font-size: 12px; }
+  .touch-ui .quality { margin-top: 10px; }
   .touch-ui .gauges { bottom: max(12px, env(safe-area-inset-bottom)); }
   .touch-ui .landmark { top: 18px; max-width: 35%; font-size: 16px; }
   .touch-ui .message { top: 38%; max-width: 50%; }

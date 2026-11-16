@@ -4,6 +4,7 @@ import { heightAt, favelaAt } from '../world/terrain.js'
 import { initAudio } from '../audio.js'
 import TouchControls from './TouchControls.jsx'
 import { resetTouchInput } from '../input.js'
+import { QUALITY_LEVELS, QUALITY_CHOICES } from '../quality.js'
 
 const fmt = (t) => {
   if (t == null) return '--:--.-'
@@ -100,7 +101,7 @@ function Minimap() {
 }
 
 // ---------- HUD --------------------------------------------------------------
-export default function HUD() {
+export default function HUD({ quality, level, onQuality }) {
   const [, setTick] = useState(0)
   const flashRef = useRef()
   const lastLandmark = useRef('')
@@ -187,6 +188,15 @@ export default function HUD() {
               </button>
             </div>
             {g.best != null && <div className="best">Best tour time: {fmt(g.best)}</div>}
+            <div className="quality" role="group" aria-label="Graphics quality">
+              <span className="qlabel">Quality</span>
+              {QUALITY_CHOICES.map((c) => (
+                <button key={c} className={c === quality ? 'on' : ''} aria-pressed={c === quality} onClick={() => onQuality(c)}>
+                  {c === 'auto' ? 'Auto' : QUALITY_LEVELS[c].label}
+                </button>
+              ))}
+              {quality === 'auto' && <span className="qnote">running at {QUALITY_LEVELS[level].label}</span>}
+            </div>
             {touch ? <div className="controls touch-instructions">
               <div>Drag the bottom stick down to climb, up to dive, sideways to bank.</div>
               <div>Hold Boost or Brake with your other thumb while steering.</div>

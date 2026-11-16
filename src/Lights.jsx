@@ -10,7 +10,6 @@ import { game } from './game.js'
 // by that distance so coverage around the plane never drops below ~450 m.
 // Moving objects don't cast into it (they would freeze between redraws); the
 // plane gets a cheap blob shadow instead (see Plane.jsx).
-const SHADOW_MAP = 2048
 const TITLE_SIZE = 2200
 const FLIGHT_SIZE = 520
 const REDRAW_DIST = 64
@@ -24,8 +23,9 @@ const lightUp = new THREE.Vector3().crossVectors(SUN_DIR, lightRight)
 const center = new THREE.Vector3()
 const snapOffset = (v, texel) => Math.round(v / texel) * texel - v
 
-export default function Lights() {
+export default function Lights({ shadowMapSize = 2048 }) {
   const sun = useRef()
+  const stale = useRef(true)
   const { scene, gl } = useThree()
   useEffect(() => {
     scene.fog = new THREE.Fog(FOG_COLOR, FOG_NEAR, FOG_FAR)
@@ -35,6 +35,18 @@ export default function Lights() {
     return () => { gl.shadowMap.autoUpdate = true }
   }, [scene, gl])
 
+  // The map size comes from the quality level; three.js only allocates the map
+  // once, so drop the old one and let the next frame rebuild and redraw it.
+  useEffect(() => {
+    const shadow = sun.current.shadow
+    shadow.mapSize.set(shadowMapSize, shadowMapSize)
+    if (shadow.map) {
+      shadow.map.dispose()
+      shadow.map = null
+    }
+    stale.current = true
+  }, [shadowMapSize])
+
   useFrame(() => {
     const title = game.phase === 'title'
     const focus = title ? TITLE_FOCUS : game.pos
@@ -42,7 +54,7 @@ export default function Lights() {
     const s = sun.current
     const cam = s.shadow.camera
     const resized = cam.right !== size
-    if (!resized && focus.distanceToSquared(center) < REDRAW_DIST * REDRAW_DIST) return
+    if (!resized && !stale.current && focus.distanceToSquared(center) < REDRAW_DIST * REDRAW_DIST) return
 
     if (resized) {
       cam.left = -size
@@ -51,7 +63,8 @@ export default function Lights() {
       cam.bottom = -size
       cam.updateProjectionMatrix()
     }
-    const texel = (2 * size) / SHADOW_MAP
+    stale.current = false
+    const texel = (2 * size) / shadowMapSize
     center.copy(focus)
       .addScaledVector(lightRight, snapOffset(focus.dot(lightRight), texel))
       .addScaledVector(lightUp, snapOffset(focus.dot(lightUp), texel))
@@ -69,7 +82,6 @@ export default function Lights() {
         color={SUN_COLOR}
         intensity={3.2}
         castShadow
-        shadow-mapSize={[SHADOW_MAP, SHADOW_MAP]}
         shadow-camera-near={10}
         shadow-camera-far={4000}
         shadow-bias={-0.0006}
